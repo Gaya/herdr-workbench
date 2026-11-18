@@ -1,0 +1,6 @@
+{
+  "layout:herdr-workbench": {
+    "cmd-shift-up": "space.prev",
+    "cmd-shift-down": "space.next"
+  }
+}

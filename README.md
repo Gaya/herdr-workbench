@@ -45,7 +45,12 @@ Read this before installing:
 1. Copy `layouts/herdr-workbench.json` to `~/.config/herdr-app/layouts/` and the
    folders in `mods/` to `~/.config/herdr-app/mods/`. Don't overwrite anything
    you already have under the same name.
-2. Install the Claude Code status line script. It needs `jq`.
+2. Merge the `layout:herdr-workbench` section of `keys.json` into
+   `~/.config/herdr-app/keys.json`. It adds `cmd-shift-up` and
+   `cmd-shift-down` to switch to the space above or below, only while this
+   layout shows. Editing `keys.json` makes it yours: Herdr upgrades stop
+   adding new default shortcuts to it.
+3. Install the Claude Code status line script. It needs `jq`.
    ```sh
    cp claude/statusline-usage.sh ~/.claude/ && chmod +x ~/.claude/statusline-usage.sh
    ```
@@ -54,7 +59,7 @@ Read this before installing:
    ```json
    "statusLine": { "type": "command", "command": "~/.claude/statusline-usage.sh" }
    ```
-3. Check the mods, then switch to the layout:
+4. Check the mods, then switch to the layout:
    ```sh
    for m in claude-status my-agents my-changes my-files my-tabs; do herdr-app check ~/.config/herdr-app/mods/$m; done
    herdr-app do layout.switch '{"name":"herdr-workbench"}'
