@@ -79,7 +79,7 @@
           "id": "tabs",
           "type": "block",
           "content": {
-            "mod": "tabs"
+            "mod": "my-tabs"
           },
           "size": {
             "px": 42
@@ -125,28 +125,36 @@
               "children": [
                 {
                   "id": "panel-body",
-                  "type": "stack",
+                  "type": "column",
                   "children": [
                     {
                       "id": "files",
                       "type": "block",
                       "content": {
                         "mod": "my-files"
-                      }
+                      },
+                      "size": {
+                        "weight": 1
+                      },
+                      "min": 120
                     },
                     {
                       "id": "changes",
                       "type": "block",
                       "content": {
                         "mod": "my-changes"
-                      }
+                      },
+                      "size": {
+                        "weight": 1
+                      },
+                      "min": 120
                     }
                   ],
-                  "active": "files",
                   "size": {
                     "weight": 1
                   },
-                  "min": 120
+                  "min": 120,
+                  "gap": 8
                 }
               ],
               "size": {

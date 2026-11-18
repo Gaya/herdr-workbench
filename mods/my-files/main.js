@@ -2,7 +2,7 @@
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, Editor, EditorState, Scrollbar, v_virtual_list } from "gpui-base";
 import { HIGHLIGHT, SYNTAX, freshState, lexLine } from "./syntax.js";
-import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, window } from "herdr";
+import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, window, run, setShared } from "herdr";
 
 function location() {
   const space = spaces().find(s => s.active), f = focused();
@@ -29,6 +29,16 @@ const GITHUB = {
   },
 };
 const gh = () => (settings().dark === false ? GITHUB.light : GITHUB.dark);
+// WebStorm's VCS file-status colours (Darcula / IntelliJ Light). Keys: M modified, A added, ? untracked,
+// I ignored, U conflict, C a folder containing changes (WebStorm's "highlight directories" option).
+const VCS = {
+  dark: { M: "#6897bb", C: "#6897bb", A: "#629755", "?": "#d1675a", I: "#848504", U: "#e05555", D: "#6c6c6c" },
+  light: { M: "#0032a0", C: "#0032a0", A: "#067d17", "?": "#993300", I: "#8c8c00", U: "#d50000", D: "#6c6c6c" },
+};
+const CHANGED = new Set(["M", "A", "?", "D", "U"]);
+const vcs = () => (settings().dark === false ? VCS.light : VCS.dark);
+const statusOf = (xy) => xy === "??" ? "?" : xy === "!!" ? "I"
+  : xy.includes("U") || xy === "AA" || xy === "DD" ? "U" : xy.includes("A") ? "A" : xy.includes("D") ? "D" : "M";
 
 // Text draws a tab as nothing: pad each to the next 4-column stop.
 const untab = (text) => text.replace(/[^\t]*\t/g, (s) => s.slice(0, -1).padEnd((s.length - 1) - (s.length - 1) % 4 + 4));
@@ -67,6 +77,14 @@ async function directory(path, on) {
   const fields = r.stdout.split("\0"), out = [];
   for (let i = 0; i + 1 < fields.length; i += 2) out.push({ name: fields[i + 1], dir: fields[i] === "d" });
   return out;
+}
+
+// Git repositories up to 3 levels below a folder that isn't in one (skipping node_modules and hidden folders).
+async function findRepos(base, on) {
+  const r = await exec("find", [base, "-mindepth", "1", "-maxdepth", "3",
+    "(", "-name", ".git", "-print", "-prune", ")", "-o",
+    "(", "-name", "node_modules", "-o", "-name", "Library", "-o", "-name", ".*", ")", "-prune"], { on, timeout: 15000 }).catch(() => null);
+  return (r?.stdout ?? "").split("\n").filter(Boolean).map((p) => p.slice(0, -"/.git".length)).sort().slice(0, 20);
 }
 
 export default class Files extends View {
@@ -121,17 +139,33 @@ export default class Files extends View {
           await this.loadFolder(path, context);
         }
         const top = await exec("git", ["rev-parse", "--show-toplevel"], { cwd, on }).catch(() => null);
-        const marks = {};
-        if (top?.code === 0) {
+        const marks = {}, changed = new Set();
+        let rootStatus = null;
+        const own = top?.code === 0 ? top.stdout.trim() : null;
+        // Outside a repository (a folder of projects), colour the repositories below it, as the Changes panel finds them.
+        if (!own && (this.repos?.cwd !== cwd || Date.now() - this.repos.at > 60000))
+          this.repos = { cwd, at: Date.now(), roots: await findRepos(cwd, on) };
+        const roots = own ? [own] : this.repos.roots, limit = own ?? cwd;
+        for (const base of roots) {
           // Writes nothing under .git (index lock, fsmonitor cookie): the folder watch would refresh again.
-          const status = await exec("git", ["--no-optional-locks", "-c", "core.fsmonitor=false", "status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=all"], { cwd, on }).catch(() => null);
+          // Untracked/ignored folders come back as one "dir/" entry; their contents inherit it in rows().
+          const status = await exec("git", ["--no-optional-locks", "-c", "core.fsmonitor=false", "status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=normal", "--ignored=matching"], { cwd: base, on }).catch(() => null);
           if (status?.code === 0) for (const entry of status.stdout.split("\0").filter(Boolean).slice(0, TOTAL)) {
-            const xy = entry.slice(0, 2);
-            marks[`${top.stdout.trim()}/${entry.slice(3)}`] = xy === "??" || xy.includes("A") ? "A" : xy.includes("U") ? "U" : xy.includes("D") ? "D" : "M";
+            const s = statusOf(entry.slice(0, 2)), abs = `${base}/${entry.slice(3).replace(/\/$/, "")}`;
+            marks[abs] = s;
+            if (s === "I") continue;
+            // Folders above a change are tinted, like WebStorm's "highlight directories that contain modified files".
+            for (let dir = abs.slice(0, abs.lastIndexOf("/")); dir.length > limit.length; dir = dir.slice(0, dir.lastIndexOf("/"))) {
+              if (changed.has(dir)) break;
+              changed.add(dir);
+            }
           }
         }
+        // The shown folder may itself sit inside an untracked or ignored one.
+        if (own) for (let dir = cwd; dir.length > own.length && !rootStatus; dir = dir.slice(0, dir.lastIndexOf("/")))
+          if (marks[dir] === "?" || marks[dir] === "I") rootStatus = marks[dir];
         if (!this.current(context)) return;
-        this.marks = marks; this.error = null; this.watch(cwd, cx);
+        this.marks = marks; this.changed = changed; this.rootStatus = rootStatus; this.error = null; this.watch(cwd, cx);
       } catch (e) { if (this.current(context)) this.error = String(e); }
       finally { if (this.context === context) this.loading = false; cx.notify(); }
     });
@@ -180,18 +214,28 @@ export default class Files extends View {
     });
   }
 
-  rows(prefix, depth, out, t) {
+  // A changed file opens as its diff in the Changes section rather than as a preview here.
+  reveal(abs) {
+    setShared("changes.reveal", { path: abs, at: Date.now() });
+    run("layout.show", { id: "changes" });
+    run("layout.show", { id: "panel" });
+  }
+
+  // inherited: "?" or "I" when an enclosing folder is untracked or ignored (git reports only the folder).
+  rows(prefix, depth, out, t, inherited = this.rootStatus) {
     if (out.length >= TOTAL || depth > 40) return out;
+    // Ignored files are muted (the theme's dim text) rather than WebStorm's olive, so they don't read as a change.
+    const colors = { ...vcs(), I: t.dim };
     for (const entry of this.entries.get(prefix) ?? []) {
       if (out.length >= TOTAL) break;
-      const path = prefix ? `${prefix}/${entry.name}` : entry.name, open = this.folders.has(path), mark = this.marks[`${this.root}/${path}`];
+      const path = prefix ? `${prefix}/${entry.name}` : entry.name, open = this.folders.has(path), abs = `${this.root}/${path}`;
+      const status = inherited ?? this.marks[abs] ?? (entry.dir && this.changed?.has(abs) ? "C" : null);
       out.push(h_flex().id(`file-${path}`).h(28).flex_none().pl(8 + depth * 18).pr(8).gap(7).items_center().rounded(7).cursor_pointer().hover(s => s.bg(t.hover))
-        .on_click((_e, cx) => entry.dir ? this.toggle(path, cx) : this.show(path, cx))
+        .on_click((_e, cx) => entry.dir ? this.toggle(path, cx) : CHANGED.has(status) ? this.reveal(abs) : this.show(path, cx))
         .child(entry.dir ? svg(`mods/my-files/chevron-${open ? "down" : "right"}.svg`).size(12).flex_none().text_color(t.dim) : div().w(12).flex_none())
         .child(svg(`mods/my-files/${entry.dir ? "folder" : "file"}.svg`).size(14).flex_none().text_color(t.muted))
-        .child(div().flex_1().min_w(0).truncate().child(entry.name))
-        .when(Boolean(mark), el => el.child(div().text_size(11).text_color(mark === "A" ? gh().add : mark === "D" || mark === "U" ? gh().del : gh().mod).child(mark))));
-      if (entry.dir && open) this.rows(path, depth + 1, out, t);
+        .child(div().flex_1().min_w(0).truncate().when(Boolean(status), el => el.text_color(colors[status])).child(entry.name)));
+      if (entry.dir && open) this.rows(path, depth + 1, out, t, status === "?" || status === "I" ? status : null);
     }
     return out;
   }

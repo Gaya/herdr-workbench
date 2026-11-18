@@ -3,8 +3,8 @@
 // to 3 folders below it, each in its own section. Committing goes to the
 // repository of the selected file.
 import { View, div } from "gpui-kit";
-import { v_flex, h_flex, InputState, Input, Scrollbar, v_virtual_list } from "gpui-base";
-import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings } from "herdr";
+import { v_flex, h_flex, InputState, Input, Scrollbar, v_virtual_list, ScrollHandle } from "gpui-base";
+import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, shared } from "herdr";
 import { HIGHLIGHT, SYNTAX, freshState, lexLine } from "./syntax.js";
 
 function location() {
@@ -115,7 +115,8 @@ async function scan(root, on) {
 export default class Changes extends View {
   init(_props, cx) {
     this.repos = []; this.files = []; this.rows = []; this.diffWidth = 0; this.message = ""; this.handle = cx.focus_handle();
-    this.watches = new Map();
+    this.watches = new Map(); this.listScroll = ScrollHandle.new();
+    this.revealed = shared("changes.reveal")?.at ?? null;
     this.input = InputState.new({ placeholder: "Commit message" });
     this.input.on("change", (_e, cx) => {
       const hadMessage = Boolean(this.message.trim());
@@ -239,6 +240,21 @@ export default class Changes extends View {
     cx.notify();
   }
 
+  // The Files panel asks for a file's diff through shared("changes.reveal"). A file missing from the
+  // list (changed since the last scan) triggers one rescan, and is picked when that lands.
+  reveal(cx) {
+    const ask = shared("changes.reveal");
+    if (!ask?.path || ask.at === this.revealed || Date.now() - ask.at > 5000) return;
+    const file = this.files.find((f) => `${f.repo}/${f.path}` === ask.path);
+    if (!file) { if (this.rescanned !== ask.at) { this.rescanned = ask.at; this.found = null; this.refresh(cx); } return; }
+    this.revealed = ask.at;
+    if (this.open !== file.id) this.pick(file.id, cx);
+    const sections = this.repos.length > 1;
+    const order = sections ? this.repos.filter((r) => r.files.length).flatMap((r) => [null, ...r.files]) : this.files;
+    const index = order.indexOf(file);
+    if (index >= 0) this.listScroll.scroll_to_item(index);
+  }
+
   // Where a commit goes: the selected file's repository, else the only one with changes.
   target() {
     const file = this.files.find((f) => f.id === this.open);
@@ -298,6 +314,7 @@ export default class Changes extends View {
 
   render(cx) {
     if (key() !== this.context) this.refresh(cx);
+    this.reveal(cx);
     const t = theme(), add = this.files.reduce((n, f) => n + f.add, 0), del = this.files.reduce((n, f) => n + f.del, 0);
     const changed = this.repos.filter((r) => r.files.length);
     const sections = this.repos.length > 1;
@@ -318,7 +335,7 @@ export default class Changes extends View {
         .child(div().flex_1()).child(div().text_size(11).text_color(gh().addText).child(`+${add}`)).child(div().text_size(11).text_color(gh().delText).child(`−${del}`)))
       // overflow_y_scrollbar() wraps the list, so its flex sizing never reached the panel's layout.
       .child(div().flex_1().min_h(44).max_h(this.files.length * 28 + (sections ? changed.length * 26 : 0) + 12).relative().border_b(1).border_color(t.border)
-        .child(v_flex().id("changes-list").absolute().inset_0().overflow_y_scroll().p(6).children(rows)
+        .child(v_flex().id("changes-list").absolute().inset_0().overflow_y_scroll().track_scroll(this.listScroll).p(6).children(rows)
           .when(!this.files.length, (e) => e.child(div().p(8).text_color(t.dim).child(empty))))
         .child(Scrollbar.vertical("changes-list").absolute().inset_0()))
       .when(limited || this.found?.more > 0 || (sections && clean > 0 && this.files.length > 0), el => el.child(div().px(12).py(4).text_size(11).text_color(t.dim).child([

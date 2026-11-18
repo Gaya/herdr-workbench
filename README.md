@@ -1,4 +1,4 @@
-# Herd Workbench
+# Herdr Workbench
 
 A [Herdr](https://herdr.dev) layout and set of mods for working with Claude Code.
 Built on Herdr 0.1.16's `main` layout.
@@ -9,12 +9,21 @@ Built on Herdr 0.1.16's `main` layout.
 - **Agents list** (`my-agents`): Herdr's agents list, with each Claude session's
   context percentage.
 - **Files panel** (`my-files`): a lazy file browser for the focused pane's
-  folder, with read-only previews and GitHub-style syntax highlighting.
+  folder, with read-only previews and GitHub-style syntax highlighting. Names
+  are coloured by git status in WebStorm's colours (modified, added, untracked,
+  ignored, conflicted), and folders that contain changes are tinted. Outside a
+  repository it colours the repositories below the folder. Clicking a changed
+  file opens its diff in the Changes panel.
 - **Changes panel** (`my-changes`): Herdr's Changes panel, extended to every git
   repository up to 3 folders below the current one, with GitHub-coloured diffs.
   Committing goes to the repository of the selected file.
 
-The Files and Changes panels share a right-hand column, opened from the tab bar.
+- **Tab bar** (`my-tabs`): Herdr's tab bar, with the Files and Changes buttons
+  toggling their own section of the side panel, so both can be open at once.
+
+Files and Changes stack in a right-hand column. Each tab-bar button shows or
+hides its section, closing the last one closes the column, and the choice is
+remembered per space.
 
 ## What it touches outside Herdr
 
@@ -33,7 +42,7 @@ Read this before installing:
 
 ## Install
 
-1. Copy `layouts/herd-workbench.json` to `~/.config/herdr-app/layouts/` and the
+1. Copy `layouts/herdr-workbench.json` to `~/.config/herdr-app/layouts/` and the
    folders in `mods/` to `~/.config/herdr-app/mods/`. Don't overwrite anything
    you already have under the same name.
 2. Install the Claude Code status line script. It needs `jq`.
@@ -47,10 +56,10 @@ Read this before installing:
    ```
 3. Check the mods, then switch to the layout:
    ```sh
-   for m in claude-status my-agents my-changes my-files; do herdr-app check ~/.config/herdr-app/mods/$m; done
-   herdr-app do layout.switch '{"name":"herd-workbench"}'
+   for m in claude-status my-agents my-changes my-files my-tabs; do herdr-app check ~/.config/herdr-app/mods/$m; done
+   herdr-app do layout.switch '{"name":"herdr-workbench"}'
    ```
    `ctrl-shift-l` switches back to your previous layout.
 
-The layout also uses Herdr's shipped `workspace-chrome`, `spaces`, `tabs` and
-`pane` mods.
+The layout also uses Herdr's shipped `workspace-chrome`, `spaces` and `pane`
+mods.
